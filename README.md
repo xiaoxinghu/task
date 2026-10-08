@@ -28,3 +28,12 @@ Add one line to your `AGENTS.md`:
 ```markdown
 Tasks are tracked with the `task` CLI. Run `task help` before picking up, adding or claiming a task.
 ```
+
+## Development
+
+Run the checks before opening a pull request:
+
+```sh
+shellcheck task test/run.sh
+bash test/run.sh
+```

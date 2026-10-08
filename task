@@ -15,7 +15,11 @@ USAGE
   task [-d <dir>] <command> [args]
 
 COMMANDS
-  list                     Show every task with its state.
+  list [--tsv]             Show every task with its state.
+                             --tsv  one line per task for scripts and
+                                    editors: state, ID, title and unmet
+                                    blockers, separated by tabs. Blockers
+                                    are separated by spaces, or empty.
   ready                    Print the IDs of all ready tasks.
   next                     Print the ID of the first ready task.
   add [-p <parent>] [-b <id>]... [-F <file>] <title>
@@ -29,6 +33,10 @@ COMMANDS
                            task/<id> and its worktree; prints the worktree path.
   done [<id>]              Set status: done in the task file. Without <id>,
                            uses the task of the current task/<id> branch.
+  path [<id>]              Print the absolute path of the task file in this
+                           worktree, then the README.md of each folder above
+                           it, from the top down. Without <id>, uses the
+                           task of the current task/<id> branch.
   help                     Show this manual.
 
 OPTIONS
@@ -72,7 +80,8 @@ STATES
 
 WORKFLOW FOR AGENTS
   1. cd "$(task claim)"          claim the next ready task, enter its worktree
-  2. Read the task file and every README.md in the folders above it.
+  2. Read the files task path prints: the task file, then every README.md
+     in the folders above it.
   3. Do the work; commit on the task/<id> branch.
   4. task done && git commit -am "done: <id>"
   5. Get task/<id> merged into main, then from the main worktree:
@@ -93,6 +102,7 @@ EXAMPLES
   BODY
   task list                                          see what is blocked and why
   task claim auth/02-logout-button                   claim a specific task
+  task path                                          files to read for this branch's task
   task -d .scratch/plan next                         use another tasks folder
   TASK_WORKTREES=~/wt task claim                     put worktrees elsewhere
 
@@ -145,7 +155,7 @@ fm {
   else if (key == "ordered") ordered[id] = (v == "true")
   next
 }
-!titled && /^# / { title[id] = substr($0, 3); titled = 1 }
+!titled && /^# / { title[id] = substr($0, 3); gsub(/\t/, " ", title[id]); titled = 1 }
 END {
   for (i = 1; i <= n; i++)  # link each node to its previous sibling (input is sorted)
     for (x = ids[i]; x != ""; x = p) {
@@ -177,6 +187,11 @@ scan() {
 }
 
 cmd_list() {
+  if (($#)); then
+    [[ "$1" == --tsv && $# == 1 ]] || usage_error "list takes no arguments but --tsv"
+    scan
+    return
+  fi
   scan | awk -F'\t' '{ b = $4; gsub(/ /, ", ", b)
                        printf "%-8s %s%s%s\n", $1, $2, ($3 != "" ? "  " $3 : ""),
                               ($1 == "blocked" ? "  (blocked by " b ")" : "") }'
@@ -266,21 +281,32 @@ cmd_claim() {
   echo "$dir"
 }
 
-cmd_done() {
-  local id=${1:-} b f
-  (($# <= 1)) || usage_error "done takes at most one task id"
-  if [[ -z "$id" ]]; then
-    b=$(git branch --show-current 2>/dev/null || true)
-    [[ "$b" == task/* ]] || usage_error "not on a task/<id> branch, so pass the id: task done <id>"
-    id=${b#task/}
-  fi
-  # Edit this worktree's copy so the change lands with the task's merge.
+# The ID of the current task/<id> branch, for <command> called without one.
+branch_task() {
+  local b
+  b=$(git branch --show-current 2>/dev/null || true)
+  [[ "$b" == task/* ]] || usage_error "not on a task/<id> branch, so pass the id: task $1 <id>"
+  echo "${b#task/}"
+}
+
+# The file of task <id> in this worktree: the copy that lands with the task's merge.
+task_file() {
+  local f
   if [[ -n "$mainwt" && "$root" == "$mainwt"/* ]]; then
-    f="$(git rev-parse --show-toplevel)/${root#"$mainwt"/}/$id.md"
+    f="$(git rev-parse --show-toplevel)/${root#"$mainwt"/}/$1.md"
   else
-    f="$root/$id.md"
+    f="$root/$1.md"
   fi
-  [[ -f "$f" ]] || die "no task file for $id at $f. See the IDs in: task list"
+  [[ -f "$f" && "$1" != README && "$1" != */README ]] ||
+    die "no task file for $1 at $f. See the IDs in: task list"
+  echo "$f"
+}
+
+cmd_done() {
+  local id=${1:-} f
+  (($# <= 1)) || usage_error "done takes at most one task id"
+  [[ -n "$id" ]] || id=$(branch_task "done")
+  f=$(task_file "$id")
   [[ "$(head -1 "$f")" == "---" ]] || die "$f has no frontmatter; add a status: line between --- lines"
   awk 'NR == 1 { fm = 1; print; next }
        fm && /^status:/ { if (!s) print "status: done"; s = 1; next }
@@ -289,18 +315,34 @@ cmd_done() {
   echo "$id"
 }
 
+cmd_path() {
+  local id=${1:-} f base dir="" part
+  (($# <= 1)) || usage_error "path takes at most one task id"
+  [[ -n "$id" ]] || id=$(branch_task path)
+  f=$(task_file "$id")
+  echo "$f"
+  base=${f%"/$id.md"}
+  if [[ -f "$base/README.md" ]]; then echo "$base/README.md"; fi
+  while [[ "$id" == */* ]]; do  # each folder above the task, from the top down
+    part=${id%%/*}; id=${id#*/}
+    dir+="${dir:+/}$part"
+    if [[ -f "$base/$dir/README.md" ]]; then echo "$base/$dir/README.md"; fi
+  done
+}
+
 cmd=${1:-}
 (($#)) && shift
 case "$cmd" in
-  list|ready|next) (($# == 0)) || usage_error "$cmd takes no arguments" ;;
+  ready|next) (($# == 0)) || usage_error "$cmd takes no arguments" ;;
 esac
 case "$cmd" in
-  list)  cmd_list ;;
+  list)  cmd_list "$@" ;;
   ready) scan | awk -F'\t' '$1 == "ready" { print $2 }' ;;
   next)  cmd_next ;;
   add)   cmd_add "$@" ;;
   claim) cmd_claim "$@" ;;
   done)  cmd_done "$@" ;;
+  path)  cmd_path "$@" ;;
   help|-h|--help) usage ;;
   "")    usage_error "missing command" ;;
   *)     usage_error "unknown command: $cmd" ;;
