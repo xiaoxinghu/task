@@ -29,6 +29,19 @@ Add one line to your `AGENTS.md`:
 Tasks are tracked with the `task` CLI. Run `task help` before picking up, adding or claiming a task.
 ```
 
+## Emacs
+
+`task.el` lists, adds, claims and completes tasks by running the CLI. Install it with `use-package` (Emacs 30 or later):
+
+```elisp
+(use-package task
+  :vc (:url "https://github.com/xiaoxinghu/task" :rev :newest))
+```
+
+`M-x task-list` shows the tasks of the current repository. On a task: `RET` visits it, `c` claims it, `d` marks it done, `a` adds a task and `g` reloads. `task-add`, `task-claim`, `task-done` and `task-visit` also work from any buffer in the repository, and `task-claim` and `task-path` return the worktree and the task's files for your own commands.
+
+It runs `task` from your `exec-path`, or else the copy installed with the package. Set `task-program` to use another.
+
 ## Development
 
 Run the checks before opening a pull request:
@@ -36,4 +49,6 @@ Run the checks before opening a pull request:
 ```sh
 shellcheck task test/run.sh
 bash test/run.sh
+emacs -Q --batch -L . --eval '(setq byte-compile-error-on-warn t)' -f batch-byte-compile task.el
+emacs -Q --batch -L . -l test/task-tests.el -f ert-run-tests-batch-and-exit
 ```
